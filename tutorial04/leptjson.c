@@ -1,3 +1,7 @@
+#ifdef _WINDOWS
+#define _CRTDBG_MAP_ALLOC
+#include <crtdbg.h>
+#endif
 #include "leptjson.h"
 #include <assert.h>  /* assert() */
 #include <errno.h>   /* errno, ERANGE */
@@ -86,8 +90,20 @@ static int lept_parse_number(lept_context* c, lept_value* v) {
     return LEPT_PARSE_OK;
 }
 
+static const char* lept_parse_hex4(const char* p, unsigned* u) {
+    /* \TODO */
+    return p;
+}
+
+static void lept_encode_utf8(lept_context* c, unsigned u) {
+    /* \TODO */
+}
+
+#define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
+
 static int lept_parse_string(lept_context* c, lept_value* v) {
     size_t head = c->top, len;
+    unsigned u;
     const char* p;
     EXPECT(c, '\"');
     p = c->json;
@@ -99,46 +115,31 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
                 lept_set_string(v, (const char*)lept_context_pop(c, len), len);
                 c->json = p;
                 return LEPT_PARSE_OK;
-            case '\0':
-                c->top = head;
-                return LEPT_PARSE_MISS_QUOTATION_MARK;
             case '\\':
-                switch (*p) {
-                    case '"':
-                        PUTC(c, '\"');
-                        break;
-                    case '\\':
-                        PUTC(c, '\\');
-                        break;
-                    case '/':
-                        PUTC(c, '/');
-                        break;
-                    case 'b':
-                        PUTC(c, '\b');
-                        break;
-                    case 'f':
-                        PUTC(c, '\f');
-                        break;
-                    case 'n':
-                        PUTC(c, '\n');
-                        break;
-                    case 'r':
-                        PUTC(c, '\r');
-                        break;
-                    case 't':
-                        PUTC(c, '\t');
+                switch (*p++) {
+                    case '\"': PUTC(c, '\"'); break;
+                    case '\\': PUTC(c, '\\'); break;
+                    case '/':  PUTC(c, '/' ); break;
+                    case 'b':  PUTC(c, '\b'); break;
+                    case 'f':  PUTC(c, '\f'); break;
+                    case 'n':  PUTC(c, '\n'); break;
+                    case 'r':  PUTC(c, '\r'); break;
+                    case 't':  PUTC(c, '\t'); break;
+                    case 'u':
+                        if (!(p = lept_parse_hex4(p, &u)))
+                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
+                        /* \TODO surrogate handling */
+                        lept_encode_utf8(c, u);
                         break;
                     default:
-                        c->top = head;
-                        return LEPT_PARSE_INVALID_STRING_ESCAPE;
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE);
                 }
-                p++;
                 break;
+            case '\0':
+                STRING_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK);
             default:
-                if (ch >= 0x01 && ch <=0x1F) {
-                    c->top = head;
-                    return LEPT_PARSE_INVALID_STRING_CHAR;
-                }
+                if ((unsigned char)ch < 0x20)
+                    STRING_ERROR(LEPT_PARSE_INVALID_STRING_CHAR);
                 PUTC(c, ch);
         }
     }
@@ -150,7 +151,7 @@ static int lept_parse_value(lept_context* c, lept_value* v) {
         case 'f':  return lept_parse_literal(c, v, "false", LEPT_FALSE);
         case 'n':  return lept_parse_literal(c, v, "null", LEPT_NULL);
         default:   return lept_parse_number(c, v);
-        case '"':  return lept_parse_string(c, v);/*好像对于引号而言'\"'和'"'是一样的？*/
+        case '"':  return lept_parse_string(c, v);
         case '\0': return LEPT_PARSE_EXPECT_VALUE;
     }
 }
@@ -189,21 +190,13 @@ lept_type lept_get_type(const lept_value* v) {
 }
 
 int lept_get_boolean(const lept_value* v) {
-    assert(v != NULL && v->type == LEPT_TRUE || v->type == LEPT_FALSE);
-    if (v->type == LEPT_TRUE) {
-        return 1;
-    }else{
-        return 0;
-    }
+    assert(v != NULL && (v->type == LEPT_TRUE || v->type == LEPT_FALSE));
+    return v->type == LEPT_TRUE;
 }
 
 void lept_set_boolean(lept_value* v, int b) {
-    assert(v != NULL);
-    if (b == 0) {
-        v->type = LEPT_FALSE;
-    }else{
-        v->type = LEPT_TRUE;
-    }
+    lept_free(v);
+    v->type = b ? LEPT_TRUE : LEPT_FALSE;
 }
 
 double lept_get_number(const lept_value* v) {
@@ -212,9 +205,9 @@ double lept_get_number(const lept_value* v) {
 }
 
 void lept_set_number(lept_value* v, double n) {
-    assert(v != NULL);
-    v->type = LEPT_NUMBER;
+    lept_free(v);
     v->u.n = n;
+    v->type = LEPT_NUMBER;
 }
 
 const char* lept_get_string(const lept_value* v) {
